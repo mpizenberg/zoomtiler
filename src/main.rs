@@ -66,6 +66,10 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
         }
     }
 
+    // Now, we need to take 2x2 blocs of images
+    // and complete the pyramid of levels by halfing the resolution each time.
+    todo!();
+
     Ok(())
 }
 
