@@ -67,21 +67,6 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
     }
 
     Ok(())
-
-    // // Build the concatenated image.
-    // let mut concat_img = RgbImage::new(width_sum, max_height);
-    // let mut width_acc = 0;
-    // for path in &img_paths {
-    //     eprintln!("Loading {}", path.display());
-    //     let img = ImageReader::open(path)?.decode()?.into_rgb8();
-    //     concat_img.copy_from(&img, width_acc, 0)?;
-    //     width_acc += img.width();
-    // }
-    //
-    // // Save the concatenated image to disk.
-    // concat_img
-    //     .save("out.jpg")
-    //     .context("Failed to save concatenated image")
 }
 
 struct ImgExtractor {
