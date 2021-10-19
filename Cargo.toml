@@ -1,0 +1,13 @@
+[package]
+name = "zoomtiler"
+version = "1.0.0"
+authors = ["Matthieu Pizenberg <matthieu.pizenberg@gmail.com>"]
+edition = "2018"
+description = "Generate zoomify zoomable tiled images"
+license = "MPL-2.0"
+
+[dependencies]
+anyhow = "1.0.44" # for error handling
+seahorse = "1.1.2" # command line argument parser
+image = "0.23.14"
+imagesize = "0.9.0"
