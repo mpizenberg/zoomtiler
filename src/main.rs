@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use anyhow::Context;
+use image::imageops::crop_imm;
 use image::io::Reader as ImageReader;
 use image::{GenericImage, GenericImageView, Rgb, RgbImage};
 use std::collections::hash_map::Entry;
@@ -42,10 +43,20 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
     }
 
     // Assert that all image heights are the same.
-    let height = img_sizes[0].1;
-    for (_, h) in &img_sizes {
-        assert_eq!(*h, height);
+    let height = img_sizes.iter().min_by_key(|(_, h)| h).unwrap().1;
+    for ((_, h), path) in img_sizes.iter().zip(&img_paths) {
+        if *h > height {
+            eprintln!(
+                "BEWARE that image {} has height {} > {}",
+                path.display(),
+                h,
+                height
+            );
+        }
     }
+
+    // Crop the image sizes as will do the algorithm.
+    img_sizes.iter_mut().for_each(|(_, h)| *h = height);
 
     // Compute the total width of the panorama.
     let width_sum: usize = img_sizes.iter().map(|(w, _)| w).sum();
@@ -71,7 +82,7 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
     let mut extractor = ImgExtractor::new(&img_paths, &img_sizes);
     for tx in 0..tile_count_width {
         for ty in 0..tile_count_height {
-            let img = extractor.extract(tile_size, tx, ty)?;
+            let img = extractor.extract(height, tile_size, tx, ty)?;
             img.save(img_out_path(&level_out_dir, tx, ty))?;
         }
     }
@@ -222,7 +233,13 @@ impl ImgExtractor {
             img_cache: HashMap::default(),
         }
     }
-    fn extract(&mut self, tile_size: usize, tx: usize, ty: usize) -> anyhow::Result<RgbImage> {
+    fn extract(
+        &mut self,
+        img_height: usize,
+        tile_size: usize,
+        tx: usize,
+        ty: usize,
+    ) -> anyhow::Result<RgbImage> {
         let left = tx * tile_size;
         let top = ty * tile_size;
         let right = (left + tile_size).min(self.full_width);
@@ -237,15 +254,16 @@ impl ImgExtractor {
         // Clear all images from the cache that are not in that list.
         // Load images that are not loaded yet in the cache.
         let mut accum_left = 0;
+        let crop = |img: RgbImage| crop_imm(&img, 0, 0, img.width(), img_height as u32).to_image();
         for (id, (w, _)) in self.sizes.iter().enumerate() {
             if left <= accum_left + w {
                 eprintln!("Using image {} for tile ({}, {})", id, tx, ty);
                 // load the image if not
                 let img: &RgbImage = match self.img_cache.entry(id) {
                     Entry::Occupied(o) => o.into_mut(),
-                    Entry::Vacant(v) => {
-                        v.insert(ImageReader::open(&self.paths[id])?.decode()?.into_rgb8())
-                    }
+                    Entry::Vacant(v) => v.insert(crop(
+                        ImageReader::open(&self.paths[id])?.decode()?.into_rgb8(),
+                    )),
                 };
                 // copy the correct view
                 let inner_left = (left as i64 - accum_left as i64).max(0) as u32;
