@@ -54,17 +54,17 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
     eprintln!("width_levels: {}", width_levels);
     eprintln!("levels: {}", levels);
 
-    // // Start generating the images at the highest resolution level.
-    // // TODO: when vertical panoramas inputs will be allowed,
-    // // be careful with the image access order.
-    // let mut extractor = ImgExtractor::new(&img_paths, &img_sizes);
-    // for tx in 0..tile_count_width {
-    //     for ty in 0..tile_count_height {
-    //         let img = extractor.extract(tile_size, tx, ty)?;
-    //         let img_path = format!("tiles/{}_{}_{}.jpg", levels - 1, tx, ty);
-    //         img.save(&img_path)?;
-    //     }
-    // }
+    // Start generating the images at the highest resolution level.
+    // TODO: when vertical panoramas inputs will be allowed,
+    // be careful with the image access order.
+    let mut extractor = ImgExtractor::new(&img_paths, &img_sizes);
+    for tx in 0..tile_count_width {
+        for ty in 0..tile_count_height {
+            let img = extractor.extract(tile_size, tx, ty)?;
+            let img_path = format!("tiles/{}_{}_{}.jpg", levels - 1, tx, ty);
+            img.save(&img_path)?;
+        }
+    }
 
     // Now, we need to take 2x2 blocs of images
     // and complete the pyramid of levels by halfing the resolution each time.
