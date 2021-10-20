@@ -19,9 +19,9 @@ fn main() {
     app.run(args);
 }
 
-/// Image output path with zoomify convention.
-fn img_out_path(dir: &Path, lvl: usize, tx: usize, ty: usize) -> PathBuf {
-    dir.join(format!("{}-{}-{}.jpg", lvl, tx, ty))
+/// Image output path with deepzoom convention.
+fn img_out_path(dir: &Path, tx: usize, ty: usize) -> PathBuf {
+    dir.join(format!("{}_{}.jpg", tx, ty))
 }
 
 fn run(c: &seahorse::Context) -> anyhow::Result<()> {
@@ -30,7 +30,7 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
 
     // Create output directory.
     let output_dir = Path::new("tiles");
-    let img_output_dir = output_dir.join("TileGroup0");
+    let img_output_dir = output_dir.join("tiles_files");
     std::fs::create_dir_all(&img_output_dir)?;
 
     // Read the image sizes.
@@ -54,31 +54,30 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
     let tile_size = 512;
     let tile_count_width = (width_sum + tile_size - 1) / tile_size;
     let tile_count_height = (height + tile_size - 1) / tile_size;
-    let width_levels = levels_for(tile_count_width);
-    let height_levels = levels_for(tile_count_height);
+    // let width_levels = levels_for(tile_count_width);
+    // let height_levels = levels_for(tile_count_height);
 
     // let's choose a number of levels half way from the min and max
     // which correspond to the number of levels for the smallest and longest dimensions.
     // let levels = (width_levels + height_levels + 1) / 2;
-    let levels = width_levels.max(height_levels);
-    eprintln!("height_levels: {}", height_levels);
-    eprintln!("width_levels: {}", width_levels);
+    let levels = levels_for(width_sum.max(height));
     eprintln!("levels: {}", levels);
 
     // Start generating the images at the highest resolution level.
     // TODO: when vertical panoramas inputs will be allowed,
     // be careful with the image access order.
+    let level_out_dir = img_output_dir.join((levels - 1).to_string());
+    std::fs::create_dir_all(&level_out_dir)?;
     let mut extractor = ImgExtractor::new(&img_paths, &img_sizes);
     for tx in 0..tile_count_width {
         for ty in 0..tile_count_height {
             let img = extractor.extract(tile_size, tx, ty)?;
-            img.save(img_out_path(&img_output_dir, levels - 1, tx, ty))?;
+            img.save(img_out_path(&level_out_dir, tx, ty))?;
         }
     }
 
     // Now, we need to take 2x2 blocs of images
     // and complete the pyramid of levels by halfing the resolution each time.
-    let mut total_tile_count = tile_count_width * tile_count_height;
     let mut parent_x_tiles = tile_count_width;
     let mut parent_y_tiles = tile_count_height;
     for parent_level in (1..levels).rev() {
@@ -90,15 +89,14 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
         )?;
         parent_x_tiles = child_x_tiles;
         parent_y_tiles = child_y_tiles;
-        total_tile_count += parent_x_tiles * parent_y_tiles;
     }
 
     // Write the ImageProperties.xml file.
     let xml_content = format!(
-        r#"<IMAGE_PROPERTIES WIDTH="{}" HEIGHT="{}" NUMTILES="{}" NUMIMAGES="1" VERSION="1.8" TILESIZE="{}" />"#,
-        width_sum, height, total_tile_count, tile_size
+        r#"<?xml version="1.0" encoding="UTF-8"?><Image xmlns="http://schemas.microsoft.com/deepzoom/2008" TileSize="{}" Overlap="0" Format="jpg"><Size Width="{}" Height="{}"/></Image>"#,
+        tile_size, width_sum, height
     );
-    std::fs::write("tiles/ImageProperties.xml", xml_content).context("Failed to write xml file")
+    std::fs::write("tiles/tiles.dzi", xml_content).context("Failed to write xml file")
 }
 
 /// Compute half resolution images and output the number of tiles generated.
@@ -108,11 +106,14 @@ fn compute_half_resolutions(
     tile_count_width: usize,
     tile_count_height: usize,
 ) -> anyhow::Result<(usize, usize)> {
+    let level_out_dir = img_output_dir.join((previous_lvl - 1).to_string());
+    std::fs::create_dir_all(&level_out_dir)?;
     let half_tile_count_width = (tile_count_width + 1) / 2;
     let half_tile_count_height = (tile_count_height + 1) / 2;
     for tx in 0..half_tile_count_width {
         for ty in 0..half_tile_count_height {
-            let img_path = |x, y| format!("tiles/TileGroup0/{}-{}-{}.jpg", previous_lvl, x, y);
+            let img_path =
+                |tx, ty| img_out_path(&img_output_dir.join(previous_lvl.to_string()), tx, ty);
             let top_left: RgbImage = ImageReader::open(img_path(tx * 2, ty * 2))?
                 .decode()?
                 .into_rgb8();
@@ -129,7 +130,7 @@ fn compute_half_resolutions(
                 Err(_) => RgbImage::new(top_right.width(), bottom_left.height()),
             };
             let half_img: RgbImage = half_res(top_left, top_right, bottom_left, bottom_right);
-            half_img.save(img_out_path(img_output_dir, previous_lvl - 1, tx, ty))?;
+            half_img.save(img_out_path(&level_out_dir, tx, ty))?;
         }
     }
     Ok((half_tile_count_width, half_tile_count_height))
