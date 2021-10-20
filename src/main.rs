@@ -19,9 +19,19 @@ fn main() {
     app.run(args);
 }
 
+/// Image output path with zoomify convention.
+fn img_out_path(dir: &Path, lvl: usize, tx: usize, ty: usize) -> PathBuf {
+    dir.join(format!("{}-{}-{}.jpg", lvl, tx, ty))
+}
+
 fn run(c: &seahorse::Context) -> anyhow::Result<()> {
     let img_paths: Vec<&Path> = c.args.iter().map(Path::new).collect();
     assert!(!img_paths.is_empty(), "At least one input image is needed");
+
+    // Create output directory.
+    let output_dir = Path::new("tiles");
+    let img_output_dir = output_dir.join("TileGroup0");
+    std::fs::create_dir_all(&img_output_dir)?;
 
     // Read the image sizes.
     let mut img_sizes = Vec::with_capacity(img_paths.len());
@@ -49,7 +59,8 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
 
     // let's choose a number of levels half way from the min and max
     // which correspond to the number of levels for the smallest and longest dimensions.
-    let levels = (width_levels + height_levels + 1) / 2;
+    // let levels = (width_levels + height_levels + 1) / 2;
+    let levels = width_levels.max(height_levels);
     eprintln!("height_levels: {}", height_levels);
     eprintln!("width_levels: {}", width_levels);
     eprintln!("levels: {}", levels);
@@ -61,27 +72,38 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
     for tx in 0..tile_count_width {
         for ty in 0..tile_count_height {
             let img = extractor.extract(tile_size, tx, ty)?;
-            let img_path = format!("tiles/{}_{}_{}.jpg", levels - 1, tx, ty);
-            img.save(&img_path)?;
+            img.save(img_out_path(&img_output_dir, levels - 1, tx, ty))?;
         }
     }
 
     // Now, we need to take 2x2 blocs of images
     // and complete the pyramid of levels by halfing the resolution each time.
+    let mut total_tile_count = tile_count_width * tile_count_height;
     let mut parent_x_tiles = tile_count_width;
     let mut parent_y_tiles = tile_count_height;
-    for parent_level in (0..levels).rev() {
-        let (child_x_tiles, child_y_tiles) =
-            compute_half_resolutions(parent_level, parent_x_tiles, parent_y_tiles)?;
+    for parent_level in (1..levels).rev() {
+        let (child_x_tiles, child_y_tiles) = compute_half_resolutions(
+            &img_output_dir,
+            parent_level,
+            parent_x_tiles,
+            parent_y_tiles,
+        )?;
         parent_x_tiles = child_x_tiles;
         parent_y_tiles = child_y_tiles;
+        total_tile_count += parent_x_tiles * parent_y_tiles;
     }
 
-    Ok(())
+    // Write the ImageProperties.xml file.
+    let xml_content = format!(
+        r#"<IMAGE_PROPERTIES WIDTH="{}" HEIGHT="{}" NUMTILES="{}" NUMIMAGES="1" VERSION="1.8" TILESIZE="{}" />"#,
+        width_sum, height, total_tile_count, tile_size
+    );
+    std::fs::write("tiles/ImageProperties.xml", xml_content).context("Failed to write xml file")
 }
 
 /// Compute half resolution images and output the number of tiles generated.
 fn compute_half_resolutions(
+    img_output_dir: &Path,
     previous_lvl: usize,
     tile_count_width: usize,
     tile_count_height: usize,
@@ -90,7 +112,7 @@ fn compute_half_resolutions(
     let half_tile_count_height = (tile_count_height + 1) / 2;
     for tx in 0..half_tile_count_width {
         for ty in 0..half_tile_count_height {
-            let img_path = |x, y| format!("tiles/{}_{}_{}.jpg", previous_lvl, x, y);
+            let img_path = |x, y| format!("tiles/TileGroup0/{}-{}-{}.jpg", previous_lvl, x, y);
             let top_left: RgbImage = ImageReader::open(img_path(tx * 2, ty * 2))?
                 .decode()?
                 .into_rgb8();
@@ -107,7 +129,7 @@ fn compute_half_resolutions(
                 Err(_) => RgbImage::new(top_right.width(), bottom_left.height()),
             };
             let half_img: RgbImage = half_res(top_left, top_right, bottom_left, bottom_right);
-            half_img.save(format!("tiles/{}_{}_{}.jpg", previous_lvl - 1, tx, ty))?;
+            half_img.save(img_out_path(img_output_dir, previous_lvl - 1, tx, ty))?;
         }
     }
     Ok((half_tile_count_width, half_tile_count_height))
