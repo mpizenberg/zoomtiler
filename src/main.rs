@@ -216,7 +216,7 @@ impl ImgExtractor {
         let full_width = img_sizes.iter().map(|(w, _)| *w).sum();
         Self {
             paths: img_paths.iter().map(PathBuf::from).collect(),
-            sizes: img_sizes.iter().cloned().collect(),
+            sizes: img_sizes.to_vec(),
             full_width,
             full_height,
             img_cache: HashMap::default(),
@@ -267,12 +267,6 @@ impl ImgExtractor {
 
         Ok(img_tile)
     }
-}
-
-struct Level {
-    level: usize,
-    tile_count_width: usize,
-    tile_count_height: usize,
 }
 
 /// Compute the number of levels required for a given amount of tiles.
