@@ -4,9 +4,15 @@ use anyhow::Context;
 use image::imageops::crop_imm;
 use image::io::Reader as ImageReader;
 use image::{GenericImage, GenericImageView, Rgb, RgbImage};
+use seahorse::{Flag, FlagType};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+
+const DEFAULT_OUTPUT: &str = "tiles/tiles.dzi";
+const DEFAULT_FORMAT: &str = "jpg";
+const DEFAULT_TILE_SIZE: isize = 512;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -16,22 +22,67 @@ fn main() {
         .author(env!("CARGO_PKG_AUTHORS"))
         .version(env!("CARGO_PKG_VERSION"))
         .usage(format!("{} IMG...", app_name))
-        .action(|c| run(c).unwrap());
+        .flag(
+            Flag::new("output", FlagType::String)
+                .description(format!("{} *.png --output {}", app_name, DEFAULT_OUTPUT)),
+        )
+        .flag(
+            Flag::new("format", FlagType::String)
+                .description(format!("{} *.png --format {}", app_name, DEFAULT_FORMAT)),
+        )
+        .flag(Flag::new("tilesize", FlagType::Int).description(format!(
+            "{} *.png --tilesize {}",
+            app_name, DEFAULT_TILE_SIZE
+        )))
+        .action(|c| {
+            run(c).unwrap_or_else(|err| {
+                eprintln!("{}", err);
+                panic!("There was a problem")
+            })
+        });
     app.run(args);
 }
 
 /// Image output path with deepzoom convention.
-fn img_out_path(dir: &Path, tx: usize, ty: usize) -> PathBuf {
-    dir.join(format!("{}_{}.jpg", tx, ty))
+fn img_out_path(dir: &Path, extension: &str, tx: usize, ty: usize) -> PathBuf {
+    dir.join(format!("{}_{}.{}", tx, ty, extension))
 }
 
 fn run(c: &seahorse::Context) -> anyhow::Result<()> {
     let img_paths: Vec<&Path> = c.args.iter().map(Path::new).collect();
-    assert!(!img_paths.is_empty(), "At least one input image is needed");
+    if img_paths.is_empty() {
+        anyhow::bail!("At least one input image is needed");
+    }
+
+    // Retrieve the output format from the arguments
+    let out_format = c
+        .string_flag("format")
+        .unwrap_or_else(|_| DEFAULT_FORMAT.to_string());
+    match out_format.as_str() {
+        "jpg" => (),
+        "png" => eprintln!("Beware that openseadragon has a flickering border issue with png tiles. I'd suggest using jpg instead."),
+        _ => anyhow::bail!(
+            "{} is unsupported, only jpg and png are supported",
+            &out_format
+        ),
+    }
 
     // Create output directory.
-    let output_dir = Path::new("tiles");
-    let img_output_dir = output_dir.join("tiles_files");
+    let dzi_output_path = PathBuf::from(
+        c.string_flag("output")
+            .unwrap_or_else(|_| DEFAULT_OUTPUT.to_string()),
+    );
+    if dzi_output_path.extension() != Some(OsStr::new("dzi")) {
+        anyhow::bail!(
+            "The output {} is not a .dzi file",
+            dzi_output_path.display()
+        );
+    }
+    let output_name = dzi_output_path.file_stem().unwrap().to_str().unwrap();
+    let output_dir = dzi_output_path
+        .parent()
+        .context("Output dzi has no parent directory")?;
+    let img_output_dir = output_dir.join(format!("{}_files", output_name));
     std::fs::create_dir_all(&img_output_dir)?;
 
     // Read the image sizes.
@@ -62,7 +113,12 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
     let width_sum: usize = img_sizes.iter().map(|(w, _)| w).sum();
 
     // Compute the number of levels required with the tiles sizes.
-    let tile_size = 512;
+    let tile_size = c.int_flag("tilesize").unwrap_or(DEFAULT_TILE_SIZE);
+    if tile_size <= 0 {
+        anyhow::bail!("Tile size must be > 0");
+    }
+    let tile_size: usize = tile_size as usize;
+    eprintln!("tile_size: {}", tile_size);
     let tile_count_width = (width_sum + tile_size - 1) / tile_size;
     let tile_count_height = (height + tile_size - 1) / tile_size;
     // let width_levels = levels_for(tile_count_width);
@@ -83,7 +139,7 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
     for tx in 0..tile_count_width {
         for ty in 0..tile_count_height {
             let img = extractor.extract(height, tile_size, tx, ty)?;
-            img.save(img_out_path(&level_out_dir, tx, ty))?;
+            img.save(img_out_path(&level_out_dir, &out_format, tx, ty))?;
         }
     }
 
@@ -94,6 +150,7 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
     for parent_level in (1..levels).rev() {
         let (child_x_tiles, child_y_tiles) = compute_half_resolutions(
             &img_output_dir,
+            &out_format,
             parent_level,
             parent_x_tiles,
             parent_y_tiles,
@@ -104,15 +161,16 @@ fn run(c: &seahorse::Context) -> anyhow::Result<()> {
 
     // Write the ImageProperties.xml file.
     let xml_content = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?><Image xmlns="http://schemas.microsoft.com/deepzoom/2008" TileSize="{}" Overlap="0" Format="jpg"><Size Width="{}" Height="{}"/></Image>"#,
-        tile_size, width_sum, height
+        r#"<?xml version="1.0" encoding="UTF-8"?><Image xmlns="http://schemas.microsoft.com/deepzoom/2008" TileSize="{}" Overlap="0" Format="{}"><Size Width="{}" Height="{}"/></Image>"#,
+        tile_size, out_format, width_sum, height
     );
-    std::fs::write("tiles/tiles.dzi", xml_content).context("Failed to write xml file")
+    std::fs::write(&dzi_output_path, xml_content).context("Failed to write xml file")
 }
 
 /// Compute half resolution images and output the number of tiles generated.
 fn compute_half_resolutions(
     img_output_dir: &Path,
+    out_format: &str,
     previous_lvl: usize,
     tile_count_width: usize,
     tile_count_height: usize,
@@ -123,8 +181,14 @@ fn compute_half_resolutions(
     let half_tile_count_height = (tile_count_height + 1) / 2;
     for tx in 0..half_tile_count_width {
         for ty in 0..half_tile_count_height {
-            let img_path =
-                |tx, ty| img_out_path(&img_output_dir.join(previous_lvl.to_string()), tx, ty);
+            let img_path = |tx, ty| {
+                img_out_path(
+                    &img_output_dir.join(previous_lvl.to_string()),
+                    out_format,
+                    tx,
+                    ty,
+                )
+            };
             let top_left: RgbImage = ImageReader::open(img_path(tx * 2, ty * 2))?
                 .decode()?
                 .into_rgb8();
@@ -141,7 +205,7 @@ fn compute_half_resolutions(
                 Err(_) => RgbImage::new(top_right.width(), bottom_left.height()),
             };
             let half_img: RgbImage = half_res(top_left, top_right, bottom_left, bottom_right);
-            half_img.save(img_out_path(&level_out_dir, tx, ty))?;
+            half_img.save(img_out_path(&level_out_dir, out_format, tx, ty))?;
         }
     }
     Ok((half_tile_count_width, half_tile_count_height))
