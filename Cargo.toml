@@ -2,6 +2,7 @@
 name = "zoomtiler"
 version = "1.0.0"
 authors = ["Matthieu Pizenberg <matthieu.pizenberg@gmail.com>"]
+repository = "https://github.com/mpizenberg/zoomtiler"
 edition = "2018"
 description = "Generate zoomable tiled images"
 license = "MPL-2.0"
